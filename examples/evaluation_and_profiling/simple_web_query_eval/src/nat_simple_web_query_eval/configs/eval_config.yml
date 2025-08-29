@@ -27,19 +27,34 @@ functions:
     _type: current_datetime
 
 llms:
-  nim_llm:
+  nim_llama33-70b:
     _type: nim
-    model_name: meta/llama-3.1-70b-instruct
-    temperature: 0.0
-  nim_rag_eval_llm:
-    _type: nim
-    model_name: meta/llama-3.1-70b-instruct
-    max_tokens: 8
-  nim_trajectory_eval_llm:
-    _type: nim
-    model_name: meta/llama-3.1-70b-instruct
-    temperature: 0.0
+    model_name: meta/llama-3.3-70b-instruct
+    temperature: 0.6
+    top_p: 0.95
     max_tokens: 1024
+    base_url: https://nim.aire.nvidia.com/v1/
+  openai_llm:
+    _type: nim
+    model_name: openai/gpt-oss-120b
+    temperature: 0.7
+    top_p: 0.95
+    max_tokens: 1024
+    base_url: https://gpt-oss-120b-v4-runai-flops-test.inference.b8721236.dgxcloud.ai/v1
+  nim_llama33_trajectory_eval_llm:
+    _type: nim
+    model_name: meta/llama-3.3-70b-instruct
+    temperature: 0.0
+    top_p: 1.0
+    max_tokens: 1024
+    base_url: https://nim.aire.nvidia.com/v1/
+  nim_llama31-8b:
+    _type: nim
+    model_name: meta/llama-3.1-8b-instruct
+    temperature: 0.3
+    top_p: 0.95
+    max_tokens: 1024
+    base_url: https://nim.aire.nvidia.com/v1/
 
 embedders:
   nv-embedqa-e5-v5:
@@ -49,51 +64,20 @@ embedders:
 workflow:
   _type: react_agent
   tool_names: [webpage_query, current_datetime]
-  llm_name: nim_llm
+  llm_name: nim_llama33-70b
   verbose: true
   parse_agent_response_max_retries: 3
 
 eval:
   general:
     output:
-      dir: ./.tmp/nat/examples/evaluation_and_profiling/simple_web_query_eval/eval/
+      dir: ./examples/sdg_workflow/data/eval_runs
       cleanup: true
     dataset:
-      _type: json
-      file_path: examples/evaluation_and_profiling/simple_web_query_eval/data/langsmith.json
-    profiler:
-      # Compute inter query token uniqueness
-      token_uniqueness_forecast: true
-      # Compute expected workflow runtime
-      workflow_runtime_forecast: true
-      # Compute inference optimization metrics
-      compute_llm_metrics: true
-      # Avoid dumping large text into the output CSV (helpful to not break structure)
-      csv_exclude_io_text: true
-      # Idenitfy common prompt prefixes
-      prompt_caching_prefixes:
-        enable: true
-        min_frequency: 0.1
-      bottleneck_analysis:
-        # Can also be simple_stack
-        enable_nested_stack: true
-      concurrency_spike_analysis:
-        enable: true
-        spike_threshold: 7
+      _type: jsonl
+      file_path: ./examples/sdg_workflow/data/ndd_output/2025-08-29/nat_eval_dataset_a43b4799-3d55-463f-b828-f4f01be0a0a2.jsonl
 
   evaluators:
-    rag_accuracy:
-      _type: ragas
-      metric: AnswerAccuracy
-      llm_name: nim_rag_eval_llm
-    rag_groundedness:
-      _type: ragas
-      metric: ResponseGroundedness
-      llm_name: nim_rag_eval_llm
-    rag_relevance:
-      _type: ragas
-      metric: ContextRelevance
-      llm_name: nim_rag_eval_llm
     trajectory_accuracy:
       _type: trajectory
-      llm_name: nim_trajectory_eval_llm
+      llm_name: nim_llama33_trajectory_eval_llm

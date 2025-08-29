@@ -19,7 +19,7 @@ functions:
     ndd_model_cfg:
         - candidate_llm: openai_llm
         - judge_llm: nim_llama33-70b
-    output_dir: ./ndd_output
+    output_dir: ./examples/sdg_workflow/data/ndd_output
 
 
 llms:
