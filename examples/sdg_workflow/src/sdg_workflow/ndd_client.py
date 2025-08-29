@@ -1,6 +1,7 @@
 # flake8: noqa: E501, BLE001
 # pylint: disable=C0301
 import os
+import json
 import logging
 from typing import Dict, Any, List
 
@@ -453,6 +454,154 @@ async def ndd_client_function(config: NDDWorkflowConfig, builder: Builder):
             save_path = os.path.join(output_dir, f"ndd_output_dataset_{data_id}.csv")
 
             preview.dataset.to_csv(save_path, index=True)
+            
+            # 🔄 Post-Process: Convert to TrajectoryEvaluator Ground Truth Format
+            logger.info("Converting NDD output to TrajectoryEvaluator format...")
+            
+            try:
+                # Save JSON version for post-processing
+                json_path = save_path.replace('.csv', '.json')
+                dataset_records = preview.dataset.to_dict('records')
+                with open(json_path, 'w') as f:
+                    json.dump(dataset_records, f, indent=2)
+                logger.info(f"Dataset JSON saved to: {json_path}")
+                
+                # Convert to TrajectoryEvaluator format
+                eval_items = []
+                
+                def convert_ndd_step_to_trajectory_step(step_data, step_index):
+                    """Convert NDD step to IntermediateStep format"""
+                    import time
+                    intermediate_steps = []
+                    
+                    if step_data.get("tool_calls"):
+                        for tool_idx, tool_call in enumerate(step_data["tool_calls"]):
+                            tool_name = tool_call.get("name", "unknown_tool")
+                            tool_args = tool_call.get("arguments", [])
+                            
+                            # Convert arguments
+                            tool_input = {}
+                            for arg in tool_args:
+                                if isinstance(arg, dict) and "name" in arg and "value" in arg:
+                                    tool_input[arg["name"]] = arg["value"]
+                            
+                            # TOOL_START event
+                            tool_start = {
+                                "parent_id": "root",
+                                "function_ancestry": {"parent_id": "root"},
+                                "payload": {
+                                    "event_type": "TOOL_START",
+                                    "event_timestamp": time.time() + step_index * 0.1 + tool_idx * 0.01,
+                                    "name": tool_name,
+                                    "data": {"input": tool_input, "output": None}
+                                }
+                            }
+                            
+                            # TOOL_END event
+                            tool_end = {
+                                "parent_id": "root",
+                                "function_ancestry": {"parent_id": "root"},
+                                "payload": {
+                                    "event_type": "TOOL_END",
+                                    "event_timestamp": time.time() + step_index * 0.1 + tool_idx * 0.01 + 0.005,
+                                    "name": tool_name,
+                                    "data": {
+                                        "input": None,
+                                        "output": {"status": "success", "result": f"Executed {tool_name}", "data": tool_input}
+                                    }
+                                }
+                            }
+                            
+                            intermediate_steps.extend([tool_start, tool_end])
+                    
+                    if step_data.get("content"):
+                        # LLM_END event
+                        llm_response = {
+                            "parent_id": "root",
+                            "function_ancestry": {"parent_id": "root"},
+                            "payload": {
+                                "event_type": "LLM_END",
+                                "event_timestamp": time.time() + step_index * 0.1 + 0.05,
+                                "name": "llm_response",
+                                "data": {"input": None, "output": {"content": step_data["content"]}}
+                            }
+                        }
+                        intermediate_steps.append(llm_response)
+                    
+                    return intermediate_steps
+                
+                # Process each record
+                for i, record in enumerate(dataset_records):
+                    try:
+                        # Extract question - handle JSON strings
+                        user_query_raw = record.get("user_query", {})
+                        if isinstance(user_query_raw, str):
+                            user_query = json.loads(user_query_raw)
+                        else:
+                            user_query = user_query_raw
+                        question = user_query.get("user_query", "") if isinstance(user_query, dict) else str(user_query)
+                        
+                        # Extract trajectory - handle both column names
+                        trajectory_raw = record.get("expected_trajectory") or record.get("agent_trajectory", {})
+                        if isinstance(trajectory_raw, str):
+                            trajectory_data = json.loads(trajectory_raw)
+                        else:
+                            trajectory_data = trajectory_raw
+                        steps = trajectory_data.get("steps", []) if isinstance(trajectory_data, dict) else []
+                        
+                        # Convert steps
+                        expected_trajectory = []
+                        for step_idx, step in enumerate(steps):
+                            intermediate_steps = convert_ndd_step_to_trajectory_step(step, step_idx)
+                            expected_trajectory.extend(intermediate_steps)
+                        
+                        # Extract expected answer
+                        final_answer = ""
+                        for step in reversed(steps):
+                            if step.get("content"):
+                                final_answer = step["content"]
+                                break
+                        
+                        # Create EvalInputItem
+                        eval_item = {
+                            "id": record.get("id", f"ndd_{uuid.uuid4().hex[:8]}"),
+                            "input_obj": question,
+                            "expected_output_obj": final_answer,
+                            "output_obj": None,  # To be filled by real NAT agent
+                            "expected_trajectory": expected_trajectory,  # Ground truth from NDD
+                            "trajectory": [],  # To be filled by real NAT agent
+                            "full_dataset_entry": record
+                        }
+                        
+                        eval_items.append(eval_item)
+                        logger.info(f"Converted record {i+1}: {len(expected_trajectory)} trajectory steps")
+                        
+                    except Exception as e:
+                        logger.error(f"Error converting record {i+1}: {e}")
+                
+                # Create final TrajectoryEvaluator input
+                trajectory_evaluator_input = {
+                    "eval_input_items": eval_items,
+                    "metadata": {
+                        "source": "NDD Synthetic Dataset",
+                        "domain": "general",
+                        "total_cases": len(eval_items),
+                        "ready_for_trajectory_evaluator": True,
+                        "data_id": data_id,
+                        "generated_date": current_date
+                    }
+                }
+                
+                # Save TrajectoryEvaluator ground truth
+                ground_truth_path = os.path.join(output_dir, f"trajectory_evaluator_ground_truth_{data_id}.json")
+                with open(ground_truth_path, 'w') as f:
+                    json.dump(trajectory_evaluator_input, f, indent=2, default=str)
+                
+                logger.info(f"✅ TrajectoryEvaluator ground truth saved: {ground_truth_path}")
+                logger.info(f"📊 Converted {len(eval_items)} cases ready for evaluation")
+                
+            except Exception as e:
+                logger.error(f"Post-processing failed: {e}")
 
             return save_path
 
