@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import uuid
 from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
@@ -92,6 +93,10 @@ class FunctionCall(BaseModel):
         description="Type of tool call (always 'function_call')"
     )
     name: str = Field(description="Name of the function to call")
+    tool_call_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique identifier of the function call (auto-generated)"
+    )
     arguments: List[ToolArg] = Field(
         description=(
             "List of function arguments as name-value pairs - MUST contain "
@@ -115,6 +120,10 @@ class AgentStep(BaseModel):
             "List of tool calls. Null if the agent is providing a text "
             "response (in this case content is populated)"
         )
+    )
+
+    role: Literal["user", "assistant", "tool"] = Field(
+        description="The role of the entity that generated this step."
     )
 
     @model_validator(mode='after')
